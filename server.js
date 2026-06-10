@@ -68,8 +68,23 @@ app.post('/measure-handles', async (req, res) => {
 
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    // Wait a bit extra for web components to fully render
-    await new Promise(r => setTimeout(r, 1000));
+    // Wait for web components to fully render by polling until first element has non-zero width
+    await page.waitForFunction(() => {
+      const el = document.getElementById('handle-0');
+      if (!el) return false;
+      // Check the element itself and its shadow root children
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0) return true;
+      // Some web components render inside shadow DOM
+      if (el.shadowRoot) {
+        const inner = el.shadowRoot.firstElementChild;
+        if (inner && inner.getBoundingClientRect().width > 0) return true;
+      }
+      return false;
+    }, { timeout: 15000 });
+
+    // Extra buffer for all elements to finish rendering
+    await new Promise(r => setTimeout(r, 500));
 
     // Measure each handle's bounding rect
     const widths = {};
@@ -77,9 +92,19 @@ app.post('/measure-handles', async (req, res) => {
       const width = await page.evaluate((id) => {
         const el = document.getElementById(id);
         if (!el) return null;
-        // Try shadowRoot first, then the element itself
-        const rect = el.getBoundingClientRect();
-        return Math.round(rect.width);
+        // Try the element itself first
+        let rect = el.getBoundingClientRect();
+        if (rect.width > 0) return Math.round(rect.width);
+        // Fall back to shadow root
+        if (el.shadowRoot) {
+          const inner = el.shadowRoot.firstElementChild;
+          if (inner) {
+            rect = inner.getBoundingClientRect();
+            if (rect.width > 0) return Math.round(rect.width);
+          }
+        }
+        // Fall back to offsetWidth
+        return el.offsetWidth || null;
       }, `handle-${i}`);
 
       widths[handles[i]] = width;
