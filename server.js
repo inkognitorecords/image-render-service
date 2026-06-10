@@ -4,6 +4,96 @@ const puppeteer = require('puppeteer');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
+// Shared browser launch options
+const LAUNCH_OPTS = {
+  headless: true,
+  args: ['--no-sandbox', '--disable-setuid-sandbox']
+};
+
+// POST /measure-handles
+// Body: { "handles": ["umay_music", "captainjuniordj", "vifak"] }
+// Returns: { "widths": { "umay_music": 678, "captainjuniordj": 894, "vifak": 377 } }
+app.post('/measure-handles', async (req, res) => {
+  const { handles } = req.body;
+
+  if (!handles || !Array.isArray(handles) || handles.length === 0) {
+    return res.status(400).json({ error: 'Missing or empty handles array' });
+  }
+
+  // Build HTML with one <insta-mention> per handle, all unscaled at left:0
+  // Wrapped in a hidden off-screen container so they render but aren't visible
+  const mentionElements = handles.map((handle, i) =>
+    `<insta-mention id="handle-${i}" username="${handle}" design="default" style="position:absolute;left:0;top:${i * 300}px;transform:scale(1);"></insta-mention>`
+  ).join('\n');
+
+  const html = `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="UTF-8" />
+    <script src="https://9c0cdf09-f578-45d9-9b30-8e6129de367a.storrito.com/js/insta-components.js"></script>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+      }
+      insta-story {
+        display: block;
+        width: 1080px;
+        height: 1920px;
+        position: relative;
+        overflow: visible;
+      }
+    </style>
+  </head>
+  <body>
+    <insta-story>
+      ${mentionElements}
+    </insta-story>
+  </body>
+  </html>
+  `;
+
+  let browser;
+  try {
+    browser = await puppeteer.launch(LAUNCH_OPTS);
+    const page = await browser.newPage();
+
+    await page.setViewport({
+      width: 1080,
+      height: 1920,
+      deviceScaleFactor: 1
+    });
+
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+
+    // Wait a bit extra for web components to fully render
+    await new Promise(r => setTimeout(r, 1000));
+
+    // Measure each handle's bounding rect
+    const widths = {};
+    for (let i = 0; i < handles.length; i++) {
+      const width = await page.evaluate((id) => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        // Try shadowRoot first, then the element itself
+        const rect = el.getBoundingClientRect();
+        return Math.round(rect.width);
+      }, `handle-${i}`);
+
+      widths[handles[i]] = width;
+    }
+
+    res.json({ widths });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  } finally {
+    if (browser) await browser.close();
+  }
+});
+
+// POST /render
 app.post('/render', async (req, res) => {
   const { backgroundUrl, maskUrl, outlineUrl } = req.body;
 
@@ -72,10 +162,7 @@ app.post('/render', async (req, res) => {
 
   let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+    browser = await puppeteer.launch(LAUNCH_OPTS);
 
     const page = await browser.newPage();
     await page.setViewport({
