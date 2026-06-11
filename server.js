@@ -176,6 +176,41 @@ async function scheduleStory({ html, date, uuid }) {
   });
 }
 
+// ─── AIRTABLE WRITEBACK ───────────────────────────────────────────────────────
+
+const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
+const AIRTABLE_BASE_ID = 'appi90mrkH6f7hDDX';
+const AIRTABLE_TABLE_ID = 'tblmzRejYrZW6bPuI'; // Social Media Posts
+
+async function writebackToAirtable(recordId, allSucceeded, debugNotes) {
+  if (!AIRTABLE_API_KEY) {
+    console.error('AIRTABLE_API_KEY not set — skipping writeback');
+    return;
+  }
+
+  const fields = { 'Storrito Debug Notes': debugNotes };
+  if (allSucceeded) fields['Scheduled on Storrito'] = true;
+
+  const res = await fetch(
+    `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${recordId}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${AIRTABLE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields }),
+    }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error(`Airtable writeback failed (${res.status}): ${text}`);
+  } else {
+    console.log(`Airtable writeback successful for ${recordId}`);
+  }
+}
+
 // ─── /schedule-stories ENDPOINT ──────────────────────────────────────────────
 
 app.post('/schedule-stories', async (req, res) => {
@@ -186,7 +221,7 @@ app.post('/schedule-stories', async (req, res) => {
     brVideoUrl,       // "https://drive.google.com/uc?id=...&export=download"
     arVideoUrl,       // "https://drive.google.com/uc?id=...&export=download"
     hashtags,         // "goinkognito, deephouse, organichouse" or array
-    airtableRecordId, // for logging only
+    airtableRecordId,
   } = req.body;
 
   // Normalise: accept comma-separated strings or arrays for both fields
@@ -215,59 +250,59 @@ app.post('/schedule-stories', async (req, res) => {
     return res.status(500).json({ error: 'STORRITO_TOKEN env var not set' });
   }
 
-  const schedule = buildSchedule(releaseDate);
-  const results = [];
-  let allSucceeded = true;
+  // Respond immediately to avoid Airtable script timeout
+  res.json({ status: 'accepted', airtableRecordId });
 
-  for (const slot of schedule) {
-    const videoUrl = slot.type === 'BR' ? brVideoUrl : arVideoUrl;
-    const html = buildStoryHtml({
-      videoUrl,
-      smartLink,
-      handles: handlesArray,
-      hashtags: hashtagsArray,
-      storyType: slot.type,
-    });
+  // Schedule all stories in background
+  (async () => {
+    const schedule = buildSchedule(releaseDate);
+    const results = [];
+    let allSucceeded = true;
 
-    let uuid, status, errorMessage;
+    for (const slot of schedule) {
+      const videoUrl = slot.type === 'BR' ? brVideoUrl : arVideoUrl;
+      const html = buildStoryHtml({
+        videoUrl,
+        smartLink,
+        handles: handlesArray,
+        hashtags: hashtagsArray,
+        storyType: slot.type,
+      });
 
-    try {
-      uuid = await generateUuid();
-      const result = await scheduleStory({ html, date: slot.date, uuid });
-      status = result.status;
-      console.log(`[${airtableRecordId}] ${slot.label} scheduled: ${uuid} @ ${slot.date}`);
-    } catch (err) {
-      status = 'failed';
-      errorMessage = err.message;
-      allSucceeded = false;
-      console.error(`[${airtableRecordId}] ${slot.label} failed: ${err.message}`);
+      let uuid, status, errorMessage;
+
+      try {
+        uuid = await generateUuid();
+        const result = await scheduleStory({ html, date: slot.date, uuid });
+        status = result.status;
+        console.log(`[${airtableRecordId}] ${slot.label} scheduled: ${uuid} @ ${slot.date}`);
+      } catch (err) {
+        status = 'failed';
+        errorMessage = err.message;
+        allSucceeded = false;
+        console.error(`[${airtableRecordId}] ${slot.label} failed: ${err.message}`);
+      }
+
+      results.push({
+        label: slot.label,
+        type: slot.type,
+        date: slot.date,
+        uuid: uuid || null,
+        status,
+        error: errorMessage || null,
+      });
     }
 
-    results.push({
-      label: slot.label,
-      type: slot.type,
-      date: slot.date,
-      uuid: uuid || null,
-      status,
-      error: errorMessage || null,
-    });
-  }
+    // Build debug string for Airtable long text field
+    const debugNotes = results.map(r => {
+      const base = `${r.label} | ${r.date} | ${r.status}`;
+      return r.status === 'failed'
+        ? `${base} | ERROR: ${r.error}`
+        : `${base} | ${r.uuid}`;
+    }).join('\n');
 
-  // Build debug string for Airtable long text field
-  const debugNotes = results.map(r => {
-    const base = `${r.label} | ${r.date} | ${r.status}`;
-    return r.status === 'failed'
-      ? `${base} | ERROR: ${r.error}`
-      : `${base} | ${r.uuid}`;
-  }).join('\n');
-
-  res.json({
-    allSucceeded,
-    scheduledCount: results.filter(r => r.status === 'scheduled').length,
-    failedCount: results.filter(r => r.status === 'failed').length,
-    debugNotes,
-    results,
-  });
+    await writebackToAirtable(airtableRecordId, allSucceeded, debugNotes);
+  })().catch(err => console.error(`Background scheduling error: ${err.message}`));
 });
 
 // ─── /render ENDPOINT (existing) ─────────────────────────────────────────────
