@@ -182,21 +182,30 @@ app.post('/schedule-stories', async (req, res) => {
   const {
     releaseDate,      // "YYYY-MM-DD"
     smartLink,        // "https://music.inkognitorecords.vip/..."
-    artistHandles,    // ["@tomnoize", "@diggitall"]
+    artistHandles,    // "@tomnoize, @anatemusic" or ["@tomnoize"] — string or array
     brVideoUrl,       // "https://drive.google.com/uc?id=...&export=download"
     arVideoUrl,       // "https://drive.google.com/uc?id=...&export=download"
-    hashtags,         // ["goinkognito", "deephouse", "organichouse"]
+    hashtags,         // "goinkognito, deephouse, organichouse" or array
     airtableRecordId, // for logging only
   } = req.body;
+
+  // Normalise: accept comma-separated strings or arrays for both fields
+  const handlesArray = Array.isArray(artistHandles)
+    ? artistHandles
+    : (artistHandles || '').split(',').map(h => h.trim()).filter(Boolean);
+
+  const hashtagsArray = Array.isArray(hashtags)
+    ? hashtags
+    : (hashtags || '').split(',').map(h => h.trim()).filter(Boolean);
 
   // Validate
   const missing = [];
   if (!releaseDate) missing.push('releaseDate');
   if (!smartLink) missing.push('smartLink');
-  if (!artistHandles || !artistHandles.length) missing.push('artistHandles');
+  if (!handlesArray.length) missing.push('artistHandles');
   if (!brVideoUrl) missing.push('brVideoUrl');
   if (!arVideoUrl) missing.push('arVideoUrl');
-  if (!hashtags || !hashtags.length) missing.push('hashtags');
+  if (!hashtagsArray.length) missing.push('hashtags');
 
   if (missing.length) {
     return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}` });
@@ -215,8 +224,8 @@ app.post('/schedule-stories', async (req, res) => {
     const html = buildStoryHtml({
       videoUrl,
       smartLink,
-      handles: artistHandles,
-      hashtags,
+      handles: handlesArray,
+      hashtags: hashtagsArray,
       storyType: slot.type,
     });
 
