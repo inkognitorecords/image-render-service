@@ -36,6 +36,9 @@ function buildMentionStickers(handles) {
   // handles are like ["@tomnoize", "@diggitall"] — strip @ for the component
   const usernames = handles.map(h => h.replace(/^@/, ''));
 
+  // No handles — no mention stickers (artist has no Instagram)
+  if (usernames.length === 0) return '';
+
   // Scale based on longest handle to fit within left half (0–495px, 60px margin each side)
   const maxWidth = usernames.reduce((max, u) => Math.max(max, naturalWidth(u)), 0);
   const targetWidth = 375;
@@ -237,7 +240,7 @@ app.post('/schedule-stories', async (req, res) => {
   const missing = [];
   if (!releaseDate) missing.push('releaseDate');
   if (!smartLink) missing.push('smartLink');
-  if (!handlesArray.length) missing.push('artistHandles');
+  // artistHandles is optional — artist may have no Instagram account
   if (!brVideoUrl) missing.push('brVideoUrl');
   if (!arVideoUrl) missing.push('arVideoUrl');
   if (!hashtagsArray.length) missing.push('hashtags');
