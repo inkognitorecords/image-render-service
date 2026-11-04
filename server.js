@@ -372,6 +372,9 @@ app.post('/render', async (req, res) => {
   }
 });
 
+// ─── /health ENDPOINT ─────────────────────────────────────────────────────────
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
 // ─── START ────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
